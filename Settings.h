@@ -10,6 +10,16 @@
 //============================================================================
 #define ALLOWDEBUG
 
+// T-Beam 128x64 SSD1306 status display on the shared I2C bus.
+#define USE_OLED
+#define OLED_ADDRESS 0x3C
+#define OLED_WIDTH 128
+#define OLED_HEIGHT 64
+
+// TinyGPS++ exposes HDOP rather than a true position-error radius. Multiplying
+// HDOP by 5 m gives a useful, deliberately approximate consumer-GPS estimate.
+#define GPS_BASE_ACCURACY_METERS 5.0
+
 //============================================================================
 // PIN NUMBERS for the RF modules and SPI interface
 //  
@@ -28,10 +38,10 @@
 // #define CS 1
 //============================================================================
 // SPI interface pin numbers (your pin numbers might be different)
-#define SCK 36
-#define MISO 37
-#define MOSI 35
-#define CS 34
+#define SCK 5
+#define MISO 19
+#define MOSI 27
+#define CS 18
 
 //============================================================================
 // Define which radiochip you use
@@ -80,15 +90,15 @@
 //============================================================================
 
 // pin numbers for the connection from the esp32 to the RF module (yours might be diiferent)
-#define PIN_NSS 34
-#define PIN_DIO0 38
-#define PIN_BUSY 4     
-#define PIN_RESET 33
-#define PIN_DIO1 3
+#define PIN_NSS   18
+#define PIN_DIO0  26
+#define PIN_BUSY  -1
+#define PIN_RESET 23
+#define PIN_DIO1  33
+#define PIN_DIO2  32
 
-// PIN_DI02 is only used for AFSK-APRS
-// SX127x/RF69/SX126x/LLCC68 all can do AFSK-APRS when DIO2 is connected to the esp32
-#define PIN_DIO2 -1  
+// PIN_DIO2 is only used for AFSK-APRS. It is wired to GPIO32 on the T-Beam.
+// SX127x/RF69/SX126x/LLCC68 all can do AFSK-APRS when DIO2 is connected to the ESP32.
 
 //============================================================================
 // Enable these lines if you want to use a voltage divider to read voltage information
@@ -333,7 +343,7 @@
 // static const int Rx = -1, Tx = 19;   
 //============================================================================
 // GPS Serial device pin numbers
-static const int Rx = 40, Tx = 39;     // This will probably be different for your board
+static const int Rx = 34, Tx = 12;     // ESP32 RX <- GPS TX, ESP32 TX -> GPS RX
 
 static const uint32_t GPSBaud = 9600;  // modern devices are 9600 baud. some are 4800 baud.
 
@@ -389,7 +399,7 @@ static const uint32_t GPSBaud = 9600;  // modern devices are 9600 baud. some are
 // If you enable USE_FIELDSTR, the software will also send temperature, voltage, humidity en air pressure
 // You will need additional sensors for that and configure those in the software
 // TB-Tracker at this moment only supports voltage dividers and BME280 sensors
-#define USE_FIELDSTR
+//#define USE_FIELDSTR
 #define FIELDSTR "01234569"
 
 //============================================================================
