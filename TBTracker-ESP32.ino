@@ -12,9 +12,58 @@
 #include "horus_l2.h"
 #include "HorusBinaryV3.h"
 #include <esp_camera.h>
+#include <Wire.h>
+#include <XPowersLib.h>
+#if defined(USE_OLED)
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#endif
 
 // Macro for clamping Horus Binary V3 parameters
 #define CLAMP(x, lo, hi) ((x) < (lo) ? (lo) : ((x) > (hi) ? (hi) : (x)))
+XPowersLibInterface *PMU = nullptr;
+#if defined(USE_OLED)
+Adafruit_SSD1306 StatusDisplay(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+bool StatusDisplayReady = false;
+unsigned long PreviousDisplayUpdate = 0;
+#endif
+
+
+void setupTBeamPower()
+{
+  Serial.println("Initialising T-Beam AXP2101 PMU...");
+
+  PMU = new XPowersAXP2101(Wire, 21, 22);
+
+  if (!PMU->init()) {
+    Serial.println("ERROR: AXP2101 PMU not found!");
+    Serial.println("Expected AXP2101 at address 0x34 on SDA=21/SCL=22.");
+    delete PMU;
+    PMU = nullptr;
+
+    // Stop here, but only after Serial has been started so the failure is visible.
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  Serial.println("AXP2101 detected.");
+
+  // T-Beam V1.2 AXP2101: ALDO2 powers the LoRa radio.
+  PMU->setPowerChannelVoltage(XPOWERS_ALDO2, 3300);
+  PMU->enablePowerOutput(XPOWERS_ALDO2);
+
+  // T-Beam V1.2 AXP2101: ALDO3 powers the GPS receiver.
+  PMU->setPowerChannelVoltage(XPOWERS_ALDO3, 3300);
+  PMU->enablePowerOutput(XPOWERS_ALDO3);
+
+  // DC1 supplies the ESP32 on this revision. Do not reconfigure it.
+  PMU->disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+
+  delay(500);
+
+  Serial.println("LoRa and GPS power enabled.");
+}
 
 //============================================================================
 // DATA STRUCTS
@@ -29,8 +78,101 @@ struct TGPS {
   unsigned int Satellites;
   unsigned int Heading;
   bool validPosition = false;
+  bool validTime = false;
+  bool validHDOP = false;
+  float HDOP = 0;
+  float EstimatedAccuracy = 0;
   float Speed;
 } UGPS;
+
+#if defined(USE_OLED)
+//============================================================================
+// Initialize the optional T-Beam OLED. A missing display is non-fatal.
+//============================================================================
+void setupStatusDisplay()
+{
+  // Wire was already initialized by XPowersLib. Do not restart the shared bus.
+  StatusDisplayReady = StatusDisplay.begin(
+    SSD1306_SWITCHCAPVCC, OLED_ADDRESS, false, false);
+
+  if (!StatusDisplayReady) {
+    toSerialConsole("OLED display not found; continuing without it.\n");
+    return;
+  }
+
+  StatusDisplay.clearDisplay();
+  StatusDisplay.setTextColor(SSD1306_WHITE);
+  StatusDisplay.setTextSize(1);
+  StatusDisplay.setCursor(0, 0);
+  StatusDisplay.println(F("TBTRACKER STARTING"));
+  StatusDisplay.println();
+  StatusDisplay.println(F("PMU: AXP2101 OK"));
+  StatusDisplay.println(F("GPS + RADIO: ON"));
+  StatusDisplay.display();
+  toSerialConsole("OLED status display initiated okay.\n");
+}
+
+//============================================================================
+// Refresh the status screen at most once per second.
+//============================================================================
+void updateStatusDisplay(bool forceUpdate = false)
+{
+  if (!StatusDisplayReady) return;
+
+  unsigned long now = millis();
+  if (!forceUpdate && (now - PreviousDisplayUpdate < 1000)) return;
+  PreviousDisplayUpdate = now;
+
+  StatusDisplay.clearDisplay();
+  StatusDisplay.setTextColor(SSD1306_WHITE);
+  StatusDisplay.setTextSize(1);
+
+  StatusDisplay.setCursor(0, 0);
+  StatusDisplay.print(F("TBTRACKER  RUNNING"));
+  StatusDisplay.drawFastHLine(0, 9, OLED_WIDTH, SSD1306_WHITE);
+
+  StatusDisplay.setCursor(0, 13);
+  StatusDisplay.print(F("UTC  "));
+  if (UGPS.validTime) {
+    if (UGPS.Hours < 10) StatusDisplay.print('0');
+    StatusDisplay.print(UGPS.Hours);
+    StatusDisplay.print(':');
+    if (UGPS.Minutes < 10) StatusDisplay.print('0');
+    StatusDisplay.print(UGPS.Minutes);
+    StatusDisplay.print(':');
+    if (UGPS.Seconds < 10) StatusDisplay.print('0');
+    StatusDisplay.print(UGPS.Seconds);
+  } else {
+    StatusDisplay.print(F("--:--:--"));
+  }
+
+  StatusDisplay.setCursor(0, 25);
+  StatusDisplay.print(F("GPS FIX: "));
+  StatusDisplay.print(UGPS.validPosition ? F("YES") : F("NO"));
+
+  StatusDisplay.setCursor(0, 37);
+  StatusDisplay.print(F("SATS "));
+  StatusDisplay.print(UGPS.Satellites);
+  StatusDisplay.print(F("  HDOP "));
+  if (UGPS.validHDOP) {
+    StatusDisplay.print(UGPS.HDOP, 1);
+  } else {
+    StatusDisplay.print(F("--"));
+  }
+
+  StatusDisplay.setCursor(0, 49);
+  StatusDisplay.print(F("EST ACC: "));
+  if (UGPS.validPosition && UGPS.validHDOP) {
+    StatusDisplay.print(F("+/-"));
+    StatusDisplay.print(UGPS.EstimatedAccuracy, 1);
+    StatusDisplay.print(F("m"));
+  } else {
+    StatusDisplay.print(F("--"));
+  }
+
+  StatusDisplay.display();
+}
+#endif
 
 // Struct to hold LoRA settings
 struct TLoRaSettings {
@@ -380,13 +522,6 @@ void setup() {
   // Set CPU speed to 40MHz to spare energy
   // setCpuFrequencyMhz(40);
 
-// Disable the Bluetooth stack if it is on the board
-#if defined(CONFIG_BT_ENABLED)
-  btStop();
-#else
-    toSerialConsole("No Bluetooth radio detected.\n");
-#endif
-
   // Setup Serial for debugging
 #if defined(ALLOWDEBUG)
   Serial.begin(115200);
@@ -402,14 +537,30 @@ void setup() {
   }
 #endif
 
+  // The PMU diagnostic must run after Serial.begin(). Otherwise a failed PMU
+  // probe enters its stop loop before any useful message can be displayed.
+  setupTBeamPower();
+
+// Disable the Bluetooth stack if it is on the board
+#if defined(CONFIG_BT_ENABLED)
+  btStop();
+#else
+    toSerialConsole("No Bluetooth radio detected.\n");
+#endif
+
   // Write the version information
   write_version_info();
+
+#if defined(USE_OLED)
+  setupStatusDisplay();
+#endif
   
   // Start the SPI interface
   SPI.begin(SCK, MISO, MOSI, CS);
 
   // Setup the GPS
-  SerialGPS.begin(GPSBaud, SERIAL_8N1, Tx, Rx);
+  // HardwareSerial arguments are RX pin first, then TX pin.
+  SerialGPS.begin(GPSBaud, SERIAL_8N1, Rx, Tx);
   
   // Test communication with the GPS for 2 seconds
   GPSCommTest(2000);
@@ -458,6 +609,9 @@ void loop() {
   // Get data from the GPS
   smartDelay(1000);
   CheckGPS();
+#if defined(USE_OLED)
+  updateStatusDisplay();
+#endif
   printSensorData();
 
   // Process any received LoRa packets
