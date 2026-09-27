@@ -47,13 +47,14 @@ static void smartDelay(unsigned long ms) {
 static void processGPSData() {
 
   // Number of Satellitese
-  if (gps.satellites.isValid())
+  if (gps.satellites.isValid() && gps.satellites.age() < 5000)
     UGPS.Satellites = gps.satellites.value();
   else
     UGPS.Satellites = 0;
 
   // Time
-  if (gps.time.isValid()) {
+  UGPS.validTime = gps.time.isValid() && gps.time.age() < 5000;
+  if (UGPS.validTime) {
     UGPS.Hours = gps.time.hour();
     UGPS.Minutes = gps.time.minute();
     UGPS.Seconds = gps.time.second();
@@ -71,7 +72,7 @@ static void processGPSData() {
   }
 
   // Position
-  if (gps.location.isValid()) {
+  if (gps.location.isValid() && gps.location.age() < 5000) {
     UGPS.validPosition = true;
     UGPS.Longitude = gps.location.lng();
     UGPS.Latitude = gps.location.lat();
@@ -97,6 +98,17 @@ static void processGPSData() {
      UGPS.Speed = gps.speed.kmph();
   else
      UGPS.Speed = 0;
+
+  // NMEA provides HDOP, not a true accuracy radius. The displayed metre value
+  // is an estimate based on HDOP and GPS_BASE_ACCURACY_METERS from Settings.h.
+  UGPS.validHDOP = gps.hdop.isValid() && gps.hdop.age() < 5000;
+  if (UGPS.validHDOP) {
+    UGPS.HDOP = gps.hdop.hdop();
+    UGPS.EstimatedAccuracy = UGPS.HDOP * GPS_BASE_ACCURACY_METERS;
+  } else {
+    UGPS.HDOP = 0;
+    UGPS.EstimatedAccuracy = 0;
+  }
 }
 
 //============================================================================
